@@ -1,0 +1,8 @@
+name = "cerebro-da-nossa-ia"
+main = "src/index.js"
+compatibility_date = "2026-11-09"
+
+[vars]
+OPENAI_MODEL = "gpt-4.1-mini"
+# Configure ALLOWED_ORIGIN depois de publicar o site, por exemplo:
+# ALLOWED_ORIGIN = "https://seu-site.pages.dev"
