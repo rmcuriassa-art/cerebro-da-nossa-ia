@@ -18,10 +18,18 @@ function corsHeaders(request, env) {
   return headers;
 }
 
-function authorized(request, env) {
-  const expected = env.NEXUS_API_KEY;
-  if (!expected) return false;
-  return request.headers.get("Authorization") === `Bearer ${expected}`;
+async function authenticateUser(request, env) {
+  const token = request.headers.get("Authorization") || "";
+  if (!token.startsWith("Bearer ") || !env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) return null;
+  const response = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
+    headers: {
+      apikey: env.SUPABASE_ANON_KEY,
+      authorization: token,
+    },
+  });
+  if (!response.ok) return null;
+  const user = await response.json().catch(() => null);
+  return user?.id ? user : null;
 }
 
 async function saveMessage(env, userId, role, content) {
@@ -55,14 +63,15 @@ async function getRecentMessages(env, userId) {
 }
 
 async function chat(request, env) {
-  if (!authorized(request, env)) return json({ error: "Não autorizado." }, 401);
+  const user = await authenticateUser(request, env);
+  if (!user) return json({ error: "Sessão inválida. Entre na sua conta para continuar." }, 401);
   const body = await request.json().catch(() => null);
   const message = typeof body?.message === "string" ? body.message.trim() : "";
-  const userId = typeof body?.userId === "string" ? body.userId.trim() : "";
-  if (!message || message.length > 8000 || !userId || userId.length > 120) {
-    return json({ error: "Envie userId e uma mensagem (máximo 8.000 caracteres)." }, 400);
+  const userId = user.id;
+  if (!message || message.length > 8000) {
+    return json({ error: "Envie uma mensagem com até 8.000 caracteres." }, 400);
   }
-  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY || !env.OPENAI_API_KEY) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY || !env.SUPABASE_SERVICE_ROLE_KEY || !env.OPENAI_API_KEY) {
     return json({ error: "Configure os secrets e variáveis do Worker antes de usar o chat." }, 503);
   }
 
