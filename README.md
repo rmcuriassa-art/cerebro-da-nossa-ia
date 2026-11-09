@@ -22,7 +22,7 @@ Backend inicial do Nexus para Cloudflare Workers, com memória de conversas no S
 2. Vá em **Workers & Pages** e crie um Worker.
 3. Para publicar pelo GitHub, conecte este repositório e escolha a branch `feat/nexus-worker-foundation` (ou use Wrangler localmente).
 4. Configure os secrets/variáveis no Worker:
-   - `NEXUS_API_KEY`: uma senha longa e aleatória criada por você.
+   - `SUPABASE_ANON_KEY`: chave pública/anon do projeto, usada apenas para validar a sessão do usuário.
    - `OPENAI_API_KEY`: chave de API do provedor OpenAI.
    - `SUPABASE_URL`: URL do projeto Supabase.
    - `SUPABASE_SERVICE_ROLE_KEY`: chave service_role do Supabase.
@@ -36,13 +36,12 @@ Backend inicial do Nexus para Cloudflare Workers, com memória de conversas no S
 Envie um POST para `https://SEU-WORKER.workers.dev/v1/chat` com:
 
 Headers:
-- `Authorization: Bearer SUA_NEXUS_API_KEY`
+- `Authorization: Bearer TOKEN_DE_ACESSO_SUPABASE` (sessão do usuário autenticado)
 - `Content-Type: application/json`
 
 Body:
 ```json
 {
-  "userId": "id-estavel-do-usuario",
   "message": "Olá, Nexus!"
 }
 ```
@@ -52,7 +51,7 @@ Resposta:
 { "answer": "Olá! Como posso ajudar?", "model": "gpt-4.1-mini" }
 ```
 
-O site deve usar um identificador estável por usuário e chamar o Worker. Não exponha a chave `NEXUS_API_KEY`, a chave OpenAI ou a chave service_role no JavaScript público do navegador. Para produção, a autenticação do usuário deve ser validada no servidor, em vez de confiar apenas em um userId enviado pelo navegador.
+O site deve permitir que o usuário entre pelo Supabase Auth e enviar o access token da sessão no cabeçalho Authorization. O Worker valida esse token no Supabase e obtém o ID real da conta; o navegador não escolhe o userId. Nunca exponha a chave service_role ou a chave OpenAI no JavaScript público. A chave anon pode estar no cliente conforme o padrão do Supabase, desde que RLS esteja configurado corretamente.
 
 ## Custos e limites
 
