@@ -139,10 +139,129 @@ export default {
 
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/") {
-      return new Response(
-        `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nexus 2</title><style>body{font-family:system-ui;background:#0b1220;color:#e8eefc;display:grid;place-items:center;min-height:100vh;margin:0;padding:24px}main{max-width:560px;background:#14213a;padding:28px;border-radius:18px}h1{color:#8ab4ff}code{color:#9fe3b0}</style></head><body><main><h1>Nexus 2</h1><p>O serviço está publicado e respondendo.</p><p>Status: <strong>online</strong></p><p>Verificação técnica: <a href="/health" style="color:#8ab4ff">/health</a></p><p>O chat usa a rota <code>POST /v1/chat</code> e precisa de uma sessão autenticada.</p></main></body></html>`,
-        { status: 200, headers: { "content-type": "text/html; charset=utf-8", ...headers } }
-      );
+      const page = `<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0b1220">
+<title>Nexus 2 — Assistente</title>
+<style>
+:root{color-scheme:dark}*{box-sizing:border-box}body{font-family:system-ui,-apple-system,sans-serif;background:#0b1220;color:#e8eefc;margin:0;min-height:100vh;padding:20px;display:grid;place-items:center}.app{width:100%;max-width:720px;background:#14213a;border:1px solid #263b60;border-radius:22px;overflow:hidden;box-shadow:0 18px 60px #0005}.top{padding:24px;border-bottom:1px solid #263b60}.top h1{margin:0;color:#8ab4ff;font-size:28px}.top p{margin:6px 0 0;color:#aabbd8}.content{padding:22px}.muted{color:#aabbd8;font-size:14px}.tabs{display:flex;gap:8px;margin-bottom:18px}.tabs button,.primary,.secondary{border:0;border-radius:10px;padding:11px 15px;font-weight:650;cursor:pointer}.tabs button{background:#203454;color:#dce8ff}.tabs button.active,.primary{background:#3979db;color:white}.secondary{background:#263b60;color:#e8eefc}.field{display:block;margin:12px 0}.field span{display:block;margin-bottom:6px;font-size:14px;color:#c6d5ed}input,textarea{width:100%;border:1px solid #385276;background:#0e192c;color:white;border-radius:10px;padding:13px;font:inherit}input:focus,textarea:focus{outline:2px solid #3979db;border-color:transparent}.primary{width:100%;margin-top:8px}.notice{min-height:22px;margin:12px 0;color:#ffd28a;font-size:14px}.hidden{display:none!important}.chatlog{height:42vh;min-height:260px;max-height:480px;overflow:auto;background:#0e192c;border:1px solid #263b60;border-radius:14px;padding:14px;margin-bottom:14px}.bubble{padding:11px 13px;border-radius:12px;margin:8px 0;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.5}.user{background:#244a7d;margin-left:12%}.assistant{background:#1c2c46;margin-right:12%}.composer{display:flex;gap:8px;align-items:flex-end}.composer textarea{resize:vertical;min-height:48px;max-height:140px}.composer button{width:auto;min-width:92px;margin:0}.foot{padding:0 22px 20px;color:#8296b7;font-size:12px}@media(max-width:520px){body{padding:10px}.content{padding:16px}.top{padding:20px}.composer{flex-direction:column}.composer button{width:100%}}
+</style>
+</head>
+<body>
+<main class="app">
+<header class="top"><h1>Nexus 2</h1><p>Seu assistente inteligente, com conversas salvas na sua conta.</p></header>
+<section class="content">
+<div id="auth">
+<div class="tabs"><button id="loginTab" class="active" type="button">Entrar</button><button id="signupTab" type="button">Criar conta</button></div>
+<form id="authForm">
+<label class="field"><span>E-mail</span><input id="email" type="email" autocomplete="email" required placeholder="voce@exemplo.com"></label>
+<label class="field"><span>Senha</span><input id="password" type="password" autocomplete="current-password" minlength="6" required placeholder="Mínimo de 6 caracteres"></label>
+<button class="primary" id="authSubmit" type="submit">Entrar</button>
+</form>
+<p class="muted">Use sua conta do Nexus. Se criar uma conta nova, talvez seja necessário confirmar o e-mail antes de entrar.</p>
+</div>
+<div id="chatArea" class="hidden">
+<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px"><span id="signedIn" class="muted"></span><button id="logout" class="secondary" type="button">Sair</button></div>
+<div id="chatlog" class="chatlog" aria-live="polite"><p class="muted">Olá! Sou o Nexus. Escreva sua primeira mensagem abaixo.</p></div>
+<form id="chatForm" class="composer"><textarea id="message" maxlength="8000" required placeholder="Escreva sua mensagem..."></textarea><button class="primary" id="send" type="submit">Enviar</button></form>
+</div>
+<p id="notice" class="notice" role="status"></p>
+</section>
+<footer class="foot">Nexus 2 · Serviço protegido por autenticação</footer>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+(function(){
+  var SUPABASE_URL = "https://oczxndogkbhbafwfvqzv.supabase.co";
+  var SUPABASE_KEY = "sb_publishable_omQyqPGGapRhTtUyla59oQ_if8T1TdE";
+  var client = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  var mode = "login";
+  var auth = document.getElementById("auth");
+  var chatArea = document.getElementById("chatArea");
+  var notice = document.getElementById("notice");
+  var authForm = document.getElementById("authForm");
+  var authSubmit = document.getElementById("authSubmit");
+  var loginTab = document.getElementById("loginTab");
+  var signupTab = document.getElementById("signupTab");
+  var chatlog = document.getElementById("chatlog");
+  var sendButton = document.getElementById("send");
+  var messageBox = document.getElementById("message");
+  function say(text){notice.textContent=text||"";}
+  function setMode(next){
+    mode=next;
+    loginTab.classList.toggle("active",mode==="login");
+    signupTab.classList.toggle("active",mode==="signup");
+    authSubmit.textContent=mode==="login"?"Entrar":"Criar minha conta";
+  }
+  function addBubble(role,text){
+    var item=document.createElement("div");
+    item.className="bubble "+role;
+    item.textContent=text;
+    chatlog.appendChild(item);
+    chatlog.scrollTop=chatlog.scrollHeight;
+  }
+  function showSession(session){
+    if(session && session.user){
+      auth.classList.add("hidden");
+      chatArea.classList.remove("hidden");
+      document.getElementById("signedIn").textContent=session.user.email||"Conta conectada";
+    }else{
+      chatArea.classList.add("hidden");
+      auth.classList.remove("hidden");
+    }
+  }
+  loginTab.addEventListener("click",function(){setMode("login");say("");});
+  signupTab.addEventListener("click",function(){setMode("signup");say("");});
+  authForm.addEventListener("submit",async function(event){
+    event.preventDefault();say("");authSubmit.disabled=true;
+    var email=document.getElementById("email").value.trim();
+    var password=document.getElementById("password").value;
+    try{
+      if(mode==="signup"){
+        var created=await client.auth.signUp({email:email,password:password});
+        if(created.error) throw created.error;
+        if(!created.data.session){say("Conta criada. Confira seu e-mail para confirmar o cadastro e depois entre.");}
+        else{say("Conta criada com sucesso.");}
+      }else{
+        var logged=await client.auth.signInWithPassword({email:email,password:password});
+        if(logged.error) throw logged.error;
+        say("");
+      }
+    }catch(error){say(error.message||"Não foi possível autenticar.");}
+    finally{authSubmit.disabled=false;}
+  });
+  document.getElementById("logout").addEventListener("click",async function(){
+    await client.auth.signOut();chatlog.innerHTML='<p class="muted">Você saiu da sua conta.</p>';say("");
+  });
+  document.getElementById("chatForm").addEventListener("submit",async function(event){
+    event.preventDefault();
+    var message=messageBox.value.trim();
+    if(!message)return;
+    var current=await client.auth.getSession();
+    var session=current.data.session;
+    if(!session){showSession(null);say("Sua sessão expirou. Entre novamente.");return;}
+    addBubble("user",message);messageBox.value="";sendButton.disabled=true;sendButton.textContent="Enviando...";say("");
+    try{
+      var response=await fetch("/v1/chat",{method:"POST",headers:{"content-type":"application/json","authorization":"Bearer "+session.access_token},body:JSON.stringify({message:message})});
+      var data=await response.json().catch(function(){return {};});
+      if(!response.ok)throw new Error(data.detail||data.error||"Erro ao conversar com o Nexus.");
+      addBubble("assistant",data.answer||"Não recebi uma resposta.");
+    }catch(error){addBubble("assistant","Não consegui responder: "+(error.message||"erro desconhecido"));}
+    finally{sendButton.disabled=false;sendButton.textContent="Enviar";messageBox.focus();}
+  });
+  client.auth.getSession().then(function(result){showSession(result.data.session);});
+  client.auth.onAuthStateChange(function(_event,session){showSession(session);});
+})();
+</script>
+</body>
+</html>`;
+      return new Response(page, {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8", ...headers },
+      });
     }
     if (request.method === "GET" && url.pathname === "/health") {
       return json({ ok: true, service: "nexus-worker", version: "0.2.0", ai: "gemini" }, 200, headers);
