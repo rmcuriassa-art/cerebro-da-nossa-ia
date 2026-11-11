@@ -672,7 +672,7 @@ export default {
       });
     }
     if (request.method === "GET" && url.pathname === "/health") {
-      return json({ ok: true, service: "nexus-worker", version: "0.5.0", ai: "nexus-local-agent-v2" }, 200, headers);
+      return json({ ok: true, service: "nexus-worker", version: "0.6.0", ai: "workers-ai-gemma" }, 200, headers);
     }
     if ((request.method === "POST" || request.method === "GET") && url.pathname === "/v1/knowledge") {
       return knowledgeRoute(request, env).then((response) => {
