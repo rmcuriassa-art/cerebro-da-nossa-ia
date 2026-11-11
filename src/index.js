@@ -288,8 +288,12 @@ function buildLocalAgentAnswer(message, knowledge = [], history = []) {
     const best = ranked[0];
     if (best && best.content) {
       const extra = ranked.slice(1, 3).filter(row => row.content && row.matches > 0);
-      let answer = "Encontrei na minha memória uma informação relacionada à sua pergunta.\\n\\n" +
-        (best.title ? best.title + "\\n" : "") + best.content.slice(0, 3500);
+      const publicSource = best.item.sourceUrl || (best.content.match(/Fonte: (https?:\\/\\/[^\\s]+)/) || [])[1];
+      let answer = (publicSource
+        ? "Pesquisei uma fonte pública e encontrei estas informações. Também guardei o material na memória do Nexus.\\n\\n"
+        : "Encontrei na minha memória uma informação relacionada à sua pergunta.\\n\\n") +
+        (best.title ? best.title + "\\n" : "") + best.content.slice(0, 3500) +
+        (publicSource ? "\\n\\nFonte: " + publicSource : "");
       if (extra.length) {
         answer += "\\n\\nTambém encontrei estes registros relacionados:\\n" +
           extra.map(row => "• " + (row.title || "Outro registro") + ": " + row.content.slice(0, 700)).join("\\n\\n");
@@ -299,6 +303,65 @@ function buildLocalAgentAnswer(message, knowledge = [], history = []) {
   }
 
   return "Ainda não encontrei essa informação na memória que você me ensinou.\\n\\nSe quiser, escreva “Nexus, guarde que...” seguido da informação. Vou salvar na sua base para poder recuperá-la quando você perguntar novamente.";
+}
+
+async function searchPublicKnowledge(query) {
+  const cleanQuery = String(query || "")
+    .replace(/^(?:nexus[, ]*)?(?:pesquise|pesquisar|procure|busque|pesquisa)(?: na internet| na web| sobre)?[: ,.-]*/i, "")
+    .trim()
+    .slice(0, 180);
+  if (cleanQuery.length < 4) return [];
+
+  try {
+    const searchUrl = new URL("https://pt.wikipedia.org/w/api.php");
+    searchUrl.searchParams.set("action", "query");
+    searchUrl.searchParams.set("list", "search");
+    searchUrl.searchParams.set("srsearch", cleanQuery);
+    searchUrl.searchParams.set("srlimit", "3");
+    searchUrl.searchParams.set("srnamespace", "0");
+    searchUrl.searchParams.set("format", "json");
+    searchUrl.searchParams.set("utf8", "1");
+
+    const searchResponse = await fetch(searchUrl, {
+      headers: { "accept": "application/json", "user-agent": "Nexus2KnowledgeBot/1.0 (personal learning assistant)" }
+    });
+    if (!searchResponse.ok) return [];
+    const searchData = await searchResponse.json();
+    const hits = searchData?.query?.search || [];
+    if (!hits.length) return [];
+
+    const titles = hits.map(hit => hit.title).filter(Boolean);
+    const pageUrl = new URL("https://pt.wikipedia.org/w/api.php");
+    pageUrl.searchParams.set("action", "query");
+    pageUrl.searchParams.set("prop", "extracts");
+    pageUrl.searchParams.set("explaintext", "1");
+    pageUrl.searchParams.set("exintro", "1");
+    pageUrl.searchParams.set("exchars", "2400");
+    pageUrl.searchParams.set("titles", titles.join("|"));
+    pageUrl.searchParams.set("format", "json");
+    pageUrl.searchParams.set("redirects", "1");
+
+    const pageResponse = await fetch(pageUrl, {
+      headers: { "accept": "application/json", "user-agent": "Nexus2KnowledgeBot/1.0 (personal learning assistant)" }
+    });
+    if (!pageResponse.ok) return [];
+    const pageData = await pageResponse.json();
+    const pages = Object.values(pageData?.query?.pages || {});
+    const consultedAt = new Date().toISOString();
+
+    return pages
+      .filter(page => page && page.title && page.extract && page.extract.trim().length > 120)
+      .slice(0, 3)
+      .map(page => ({
+        title: page.title,
+        content: page.extract.trim(),
+        sourceUrl: "https://pt.wikipedia.org/wiki/" + encodeURIComponent(page.title.replace(/ /g, "_")),
+        sourceDate: consultedAt,
+        source: "Wikipédia"
+      }));
+  } catch (_) {
+    return [];
+  }
 }
 
 async function chat(request, env) {
@@ -342,9 +405,21 @@ async function chat(request, env) {
     memoryWarning = error.message;
   }
 
+  // Se a memória pessoal não tiver resposta, consulta uma fonte pública gratuita.
+  let publicResults = [];
+  if (!knowledge.length && !/^(oi|olá|ola|bom dia|boa tarde|boa noite|e aí|eai)[!. ]*$/i.test(message)) {
+    publicResults = await searchPublicKnowledge(message);
+    for (const item of publicResults) {
+      const savedContent = item.content +
+        "\\n\\nFonte: " + item.sourceUrl +
+        "\\nConsultado em: " + item.sourceDate;
+      await saveKnowledge(env, userId, "[Internet] " + item.title, savedContent).catch(() => null);
+    }
+  }
+
   try {
     const history = await getRecentMessages(env, userId).catch(() => []);
-    const answer = buildLocalAgentAnswer(message, knowledge, history);
+    const answer = buildLocalAgentAnswer(message, [...knowledge, ...publicResults], history);
 
     // Falha ao guardar o histórico não deve impedir o envio da resposta.
     await saveMessage(env, userId, "user", message).catch(() => null);
