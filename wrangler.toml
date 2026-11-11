@@ -8,3 +8,6 @@ SUPABASE_URL = "https://oczxndogkbhbafwfvqzv.supabase.co"
 SUPABASE_ANON_KEY = "sb_publishable_omQyqPGGapRhTtUyla59oQ_if8T1TdE"
 # Configure ALLOWED_ORIGIN depois de publicar o site, por exemplo:
 # ALLOWED_ORIGIN = "https://seu-site.pages.dev"
+
+[ai]
+binding = "AI"
