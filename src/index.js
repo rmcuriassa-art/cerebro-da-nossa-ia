@@ -417,11 +417,23 @@ async function generateThinkingAnswer(env, message, knowledge = [], history = []
     chat_template_kwargs: { enable_thinking: false }
   });
 
-  const answer = typeof result === "string"
+  // Workers AI pode devolver o texto em formatos diferentes conforme o modelo.
+  const rawAnswer = typeof result === "string"
     ? result
-    : (result?.response || result?.output_text || result?.result?.response || "");
+    : (
+        result?.response ||
+        result?.output_text ||
+        result?.result?.response ||
+        result?.choices?.[0]?.message?.content ||
+        result?.result?.choices?.[0]?.message?.content ||
+        result?.output?.[0]?.content?.[0]?.text ||
+        ""
+      );
+  const answer = Array.isArray(rawAnswer)
+    ? rawAnswer.map(part => typeof part === "string" ? part : (part?.text || "")).join("\n")
+    : rawAnswer;
   if (!answer || !String(answer).trim()) {
-    throw new Error("O modelo de IA não retornou texto nesta tentativa.");
+    throw new Error("A Cloudflare AI respondeu sem texto. Estrutura recebida: " + JSON.stringify(result).slice(0, 500));
   }
   return String(answer).trim().slice(0, 12000);
 }
@@ -657,6 +669,9 @@ export default {
       var data=await response.json().catch(function(){return {};});
       if(!response.ok)throw new Error(data.detail||data.error||"Erro ao conversar com o Nexus.");
       addBubble("assistant",data.answer||"Não recebi uma resposta.");
+      if(data.mode!=="workers-ai"){
+        addBubble("assistant","Aviso técnico: a inteligência artificial não foi acionada. Motivo: "+(data.ai_warning||"não informado")+". O texto acima é uma resposta local limitada.");
+      }
     }catch(error){addBubble("assistant","Não consegui responder: "+(error.message||"erro desconhecido"));}
     finally{sendButton.disabled=false;sendButton.textContent="Enviar";messageBox.focus();}
   });
