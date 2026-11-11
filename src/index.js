@@ -288,7 +288,10 @@ function buildLocalAgentAnswer(message, knowledge = [], history = []) {
     const best = ranked[0];
     if (best && best.content) {
       const extra = ranked.slice(1, 3).filter(row => row.content && row.matches > 0);
-      const publicSource = best.item.sourceUrl || (best.content.match(/Fonte: (https?:\\/\\/[^\\s]+)/) || [])[1];
+      const sourceMarker = best.content.indexOf("Fonte: ");
+      const publicSource = best.item.sourceUrl || (sourceMarker >= 0
+        ? best.content.slice(sourceMarker + 7).split("\\n")[0].trim()
+        : "");
       let answer = (publicSource
         ? "Pesquisei uma fonte pública e encontrei estas informações. Também guardei o material na memória do Nexus.\\n\\n"
         : "Encontrei na minha memória uma informação relacionada à sua pergunta.\\n\\n") +
@@ -298,7 +301,9 @@ function buildLocalAgentAnswer(message, knowledge = [], history = []) {
         answer += "\\n\\nTambém encontrei estes registros relacionados:\\n" +
           extra.map(row => "• " + (row.title || "Outro registro") + ": " + row.content.slice(0, 700)).join("\\n\\n");
       }
-      return answer + "\\n\\nUsei somente informações que você já guardou na memória do Nexus.";
+      return answer + (publicSource
+        ? "\\n\\nGuardei esta consulta na memória pública do Nexus."
+        : "\\n\\nUsei informações que já estavam guardadas na memória do Nexus.");
     }
   }
 
