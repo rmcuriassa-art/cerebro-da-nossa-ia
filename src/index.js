@@ -63,7 +63,9 @@ async function getRecentMessages(env, userId) {
 }
 
 async function generateWithGemini(env, history, message) {
-  const model = env.GEMINI_MODEL || "gemini-2.5-flash";
+  const primaryModel = env.GEMINI_MODEL || "gemini-3.8-flash";
+  const fallbackModel = env.GEMINI_FALLBACK_MODEL || "gemini-3.5-flash-lite";
+  const models = [...new Set([primaryModel, fallbackModel])];
   const contents = [
     ...history.map((item) => ({
       role: item.role === "assistant" ? "model" : "user",
@@ -72,38 +74,50 @@ async function generateWithGemini(env, history, message) {
     { role: "user", parts: [{ text: message }] },
   ];
 
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-goog-api-key": env.GEMINI_API_KEY,
-      },
-      body: JSON.stringify({
-        systemInstruction: {
-          parts: [{
-            text: env.NEXUS_SYSTEM_PROMPT ||
-              "Você é o Nexus, um assistente útil, honesto e cuidadoso. Responda em português brasileiro. Não invente ações realizadas nem diga que tem acesso a sistemas sem autorização.",
-          }],
-        },
-        contents,
-        generationConfig: { temperature: 0.4 },
-      }),
-    }
-  );
+  let lastError = "O provedor Gemini não respondeu.";
+  for (const model of models) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 900));
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-goog-api-key": env.GEMINI_API_KEY,
+          },
+          body: JSON.stringify({
+            systemInstruction: {
+              parts: [{
+                text: env.NEXUS_SYSTEM_PROMPT ||
+                  "Você é o Nexus, um assistente útil, honesto e cuidadoso. Responda em português brasileiro. Não invente ações realizadas nem diga que tem acesso a sistemas sem autorização.",
+              }],
+            },
+            contents,
+            generationConfig: { temperature: 0.4 },
+          }),
+        }
+      );
 
-  const result = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const detail = result.error?.message || "Erro no provedor Gemini.";
-    throw new Error(`Gemini API (${response.status}): ${detail}`);
+      const result = await response.json().catch(() => ({}));
+      if (response.ok) {
+        const answer = result.candidates?.[0]?.content?.parts
+          ?.map((part) => part.text || "")
+          .join("")
+          .trim();
+        if (!answer) throw new Error("O Gemini retornou uma resposta vazia.");
+        return { answer, model };
+      }
+
+      const detail = result.error?.message || "Erro no provedor Gemini.";
+      lastError = `Gemini API (${response.status}) no modelo ${model}: ${detail}`;
+      if (![429, 500, 502, 503, 504].includes(response.status)) {
+        throw new Error(lastError);
+      }
+    }
   }
-  const answer = result.candidates?.[0]?.content?.parts
-    ?.map((part) => part.text || "")
-    .join("")
-    .trim();
-  if (!answer) throw new Error("O Gemini retornou uma resposta vazia.");
-  return { answer, model };
+
+  throw new Error(`${lastError} As tentativas e o modelo alternativo também falharam.`);
 }
 
 async function chat(request, env) {
