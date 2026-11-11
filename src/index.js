@@ -79,6 +79,21 @@ async function saveKnowledge(env, userId, title, content) {
   }
 }
 
+function extractSearchTerms(text) {
+  const normalized = String(text || "")
+    .toLocaleLowerCase("pt-BR")
+    .normalize("NFD")
+    .replace(/[\\u0300-\\u036f]/g, "")
+    .replace(/[^a-z0-9\\s-]/g, " ");
+  const ignored = new Set([
+    "qual","quais","quando","onde","como","porque","por que","quem","isso","essa","esse",
+    "para","com","uma","umas","uns","dos","das","que","por","mais","menos","sobre",
+    "voce","voces","meu","minha","seu","sua","tem","ter","foi","ser","sao","era",
+    "the","and","for","with","from","this","that"
+  ]);
+  return [...new Set(normalized.split(/\\s+/).filter(word => word.length >= 3 && !ignored.has(word)))].slice(0, 7);
+}
+
 async function searchKnowledge(env, userId, searchText) {
   if (!searchText) return [];
   const headers = {
@@ -87,27 +102,54 @@ async function searchKnowledge(env, userId, searchText) {
     "content-type": "application/json",
   };
 
-  // Primeiro tenta a busca textual completa no banco.
-  const rpc = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/search_nexus_knowledge`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ search_text: searchText, owner_id: userId }),
-  });
+  const terms = extractSearchTerms(searchText);
+  const queries = [searchText, ...terms];
+  if (terms.length >= 2) queries.push(terms.slice(0, 2).join(" "));
+  const uniqueQueries = [...new Set(queries)].slice(0, 8);
 
-  if (rpc.ok) return rpc.json();
+  // Tenta a busca textual do banco com a pergunta e também com palavras-chave.
+  const rpcResults = await Promise.all(uniqueQueries.map(async (query) => {
+    try {
+      const response = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/search_nexus_knowledge`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ search_text: query, owner_id: userId }),
+      });
+      if (!response.ok) return [];
+      const rows = await response.json();
+      return Array.isArray(rows) ? rows : [];
+    } catch (_) {
+      return [];
+    }
+  }));
 
-  // Se a função de busca textual falhar, usa uma busca simples por título/conteúdo.
+  const merged = new Map();
+  for (const row of rpcResults.flat()) {
+    if (row && row.id) {
+      const old = merged.get(row.id);
+      if (!old || Number(row.rank || 0) > Number(old.rank || 0)) merged.set(row.id, row);
+    }
+  }
+  if (merged.size) return [...merged.values()].sort((a, b) => Number(b.rank || 0) - Number(a.rank || 0)).slice(0, 6);
+
+  // Alternativa: procura cada palavra importante diretamente nos títulos e conteúdos.
+  if (!terms.length) return [];
   const fallbackUrl = new URL(`${env.SUPABASE_URL}/rest/v1/nexus_knowledge`);
   fallbackUrl.searchParams.set("select", "id,title,content");
   fallbackUrl.searchParams.set("user_id", `eq.${userId}`);
-  fallbackUrl.searchParams.set("or", `(title.ilike.*${searchText.slice(0, 80)}*,content.ilike.*${searchText.slice(0, 80)}*)`);
-  fallbackUrl.searchParams.set("limit", "5");
+  const clauses = terms.slice(0, 6).flatMap(term => [
+    `title.ilike.*${term}*`,
+    `content.ilike.*${term}*`
+  ]);
+  fallbackUrl.searchParams.set("or", `(${clauses.join(",")})`);
+  fallbackUrl.searchParams.set("limit", "20");
   const fallback = await fetch(fallbackUrl, { headers });
   if (!fallback.ok) {
     const detail = await fallback.text().catch(() => "");
-    throw new Error(`Busca da memória falhou (RPC ${rpc.status}; alternativa ${fallback.status}): ${detail.slice(0, 180)}`);
+    throw new Error(`Busca da memória falhou (alternativa ${fallback.status}): ${detail.slice(0, 180)}`);
   }
-  return fallback.json();
+  const rows = await fallback.json();
+  return Array.isArray(rows) ? rows : [];
 }
 
 async function knowledgeRoute(request, env) {
@@ -216,36 +258,47 @@ function buildLocalAgentAnswer(message, knowledge = [], history = []) {
   const normalized = text.toLocaleLowerCase("pt-BR");
 
   const calculation = calculateSimpleExpression(text);
-  if (calculation !== null && /\d/.test(text)) {
+  if (calculation !== null && /\\d/.test(text)) {
     return "Fiz o cálculo: " + text + " = " + calculation.toLocaleString("pt-BR") +
-      ".\n\nSou o Nexus em modo independente: este cálculo foi feito pelo meu próprio código, sem chamar Gemini ou outra IA.";
+      ".\\n\\nEsse cálculo foi executado pelo próprio Nexus, sem Gemini.";
   }
 
   if (/^(oi|olá|ola|bom dia|boa tarde|boa noite|e aí|eai)[!. ]*$/.test(normalized)) {
-    return "Olá! Sou o Nexus. Estou funcionando em modo independente, usando minhas próprias regras e a memória guardada no banco.\n\nVocê pode me fazer uma pergunta, pedir um cálculo ou me ensinar algo pela área Memória própria.";
+    return "Olá! Sou o Nexus. Pode me perguntar sobre as informações que você já guardou na minha memória.";
   }
 
   if (/quem é você|quem e voce|o que você é|o que voce e|como você funciona|como voce funciona/.test(normalized)) {
-    return "Eu sou o Nexus, um agente experimental. Nesta primeira versão, consigo conversar por regras próprias, fazer cálculos simples e pesquisar informações que foram guardadas na minha memória.\n\nAinda não sou um modelo de linguagem completo: não tenho raciocínio geral como Gemini ou ChatGPT. Estamos construindo e testando cada capacidade.";
+    return "Sou o Nexus, um agente independente em desenvolvimento. Consigo guardar informações na sua conta, pesquisar esses registros e fazer cálculos simples. Ainda não tenho raciocínio livre de um modelo de linguagem.";
   }
 
   if (/o que você sabe fazer|o que voce sabe fazer|suas funções|suas funcoes|ajuda|comandos/.test(normalized)) {
-    return "Minhas funções atuais:\n• conversar e reconhecer algumas intenções;\n• pesquisar a memória particular salva na sua conta;\n• recuperar informações que você me ensinou;\n• fazer cálculos aritméticos simples.\n\nPara me ensinar algo novo, use a área Memória própria do Nexus e guarde um título e o conteúdo.";
+    return "Já consigo guardar informações que você me ensina, pesquisar a memória da sua conta e usar os registros encontrados para responder perguntas relacionadas. Também faço cálculos simples.";
   }
 
   if (knowledge.length) {
-    const excerpts = knowledge.slice(0, 4).map((item, index) => {
-      const title = item.title || item.name || ("Registro " + (index + 1));
-      const content = item.content || item.chunk || item.text || item.document || "";
-      return "• " + title + (content ? ":\n" + String(content).slice(0, 1800) : "");
-    }).join("\n\n");
-    return "Encontrei estas informações na minha memória própria que podem ajudar:\n\n" +
-      excerpts +
-      "\n\nEsta resposta foi montada a partir dos registros encontrados no banco do Nexus. Se faltou algo, ensine-me pela área Memória própria.";
+    const terms = extractSearchTerms(text);
+    const ranked = knowledge.map((item, index) => {
+      const title = String(item.title || item.name || "");
+      const content = String(item.content || item.chunk || item.text || item.document || "");
+      const haystack = (title + " " + content).toLocaleLowerCase("pt-BR").normalize("NFD").replace(/[\\u0300-\\u036f]/g, "");
+      const matches = terms.filter(term => haystack.includes(term)).length;
+      return { item, title, content, matches, rank: Number(item.rank || 0), index };
+    }).sort((a, b) => b.matches - a.matches || b.rank - a.rank || a.index - b.index);
+
+    const best = ranked[0];
+    if (best && best.content) {
+      const extra = ranked.slice(1, 3).filter(row => row.content && row.matches > 0);
+      let answer = "Encontrei na minha memória uma informação relacionada à sua pergunta.\\n\\n" +
+        (best.title ? best.title + "\\n" : "") + best.content.slice(0, 3500);
+      if (extra.length) {
+        answer += "\\n\\nTambém encontrei estes registros relacionados:\\n" +
+          extra.map(row => "• " + (row.title || "Outro registro") + ": " + row.content.slice(0, 700)).join("\\n\\n");
+      }
+      return answer + "\\n\\nUsei somente informações que você já guardou na memória do Nexus.";
+    }
   }
 
-  const previous = history.length ? "\n\nTambém tenho acesso ao histórico recente desta conversa, mas ainda não encontrei um registro relacionado na minha memória." : "";
-  return "Ainda não tenho uma resposta confiável para isso na minha base de conhecimento.\n\nVocê pode me ensinar: abra “Memória própria do Nexus”, salve a informação com um título e depois pergunte novamente. Assim consigo pesquisar o que foi guardado.\n\nImportante: esta versão já funciona sem Gemini, mas ainda é um agente básico baseado em regras e memória — não possui, por enquanto, um modelo de linguagem capaz de responder livremente sobre qualquer assunto." + previous;
+  return "Ainda não encontrei essa informação na memória que você me ensinou.\\n\\nSe quiser, escreva “Nexus, guarde que...” seguido da informação. Vou salvar na sua base para poder recuperá-la quando você perguntar novamente.";
 }
 
 async function chat(request, env) {
@@ -261,6 +314,23 @@ async function chat(request, env) {
   }
   if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY || !env.SUPABASE_SERVICE_ROLE_KEY) {
     return json({ error: "A configuração do Supabase está incompleta." }, 503);
+  }
+
+  // Permite ensinar o Nexus diretamente pelo chat, sem abrir o formulário de memória.
+  const learningMatch = message.match(/^(?:nexus[, ]*)?(?:guarde|salve|registre|lembre|aprenda)(?: que| isso| na memória| na memoria)?[: ,.-]*(.+)$/i);
+  if (learningMatch && learningMatch[1] && learningMatch[1].trim().length >= 5) {
+    const learnedText = learningMatch[1].trim();
+    const title = learnedText.length > 100 ? learnedText.slice(0, 97) + "..." : learnedText;
+    try {
+      await saveKnowledge(env, userId, title, learnedText);
+      const answer = "Aprendi e guardei essa informação na sua memória do Nexus:\\n\\n" + learnedText +
+        "\\n\\nQuando você fizer uma pergunta relacionada, vou procurar esse registro no banco.";
+      await saveMessage(env, userId, "user", message).catch(() => null);
+      await saveMessage(env, userId, "assistant", answer).catch(() => null);
+      return json({ answer, model: "nexus-local-v2", mode: "independent", learned: true });
+    } catch (error) {
+      return json({ error: "Não consegui guardar a informação.", detail: error.message }, 502);
+    }
   }
 
   // A memória é complementar: se a pesquisa falhar, o agente ainda deve responder.
@@ -282,7 +352,7 @@ async function chat(request, env) {
 
     return json({
       answer,
-      model: "nexus-local-v1",
+      model: "nexus-local-v2",
       mode: "independent",
       memory_warning: memoryWarning
     });
@@ -452,7 +522,7 @@ export default {
       });
     }
     if (request.method === "GET" && url.pathname === "/health") {
-      return json({ ok: true, service: "nexus-worker", version: "0.4.0", ai: "nexus-local-agent-v1" }, 200, headers);
+      return json({ ok: true, service: "nexus-worker", version: "0.5.0", ai: "nexus-local-agent-v2" }, 200, headers);
     }
     if ((request.method === "POST" || request.method === "GET") && url.pathname === "/v1/knowledge") {
       return knowledgeRoute(request, env).then((response) => {
