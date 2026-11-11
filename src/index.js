@@ -81,20 +81,33 @@ async function saveKnowledge(env, userId, title, content) {
 
 async function searchKnowledge(env, userId, searchText) {
   if (!searchText) return [];
-  const response = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/search_nexus_knowledge`, {
+  const headers = {
+    apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+    authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+    "content-type": "application/json",
+  };
+
+  // Primeiro tenta a busca textual completa no banco.
+  const rpc = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/search_nexus_knowledge`, {
     method: "POST",
-    headers: {
-      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-      authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
-      "content-type": "application/json",
-    },
+    headers,
     body: JSON.stringify({ search_text: searchText, owner_id: userId }),
   });
-  if (!response.ok) {
-    const detail = await response.text().catch(() => "");
-    throw new Error(`Falha na busca da memória (${response.status}): ${detail.slice(0, 250)}`);
+
+  if (rpc.ok) return rpc.json();
+
+  // Se a função de busca textual falhar, usa uma busca simples por título/conteúdo.
+  const fallbackUrl = new URL(`${env.SUPABASE_URL}/rest/v1/nexus_knowledge`);
+  fallbackUrl.searchParams.set("select", "id,title,content");
+  fallbackUrl.searchParams.set("user_id", `eq.${userId}`);
+  fallbackUrl.searchParams.set("or", `(title.ilike.*${searchText.slice(0, 80)}*,content.ilike.*${searchText.slice(0, 80)}*)`);
+  fallbackUrl.searchParams.set("limit", "5");
+  const fallback = await fetch(fallbackUrl, { headers });
+  if (!fallback.ok) {
+    const detail = await fallback.text().catch(() => "");
+    throw new Error(`Busca da memória falhou (RPC ${rpc.status}; alternativa ${fallback.status}): ${detail.slice(0, 180)}`);
   }
-  return response.json();
+  return fallback.json();
 }
 
 async function knowledgeRoute(request, env) {
@@ -250,13 +263,29 @@ async function chat(request, env) {
     return json({ error: "A configuração do Supabase está incompleta." }, 503);
   }
 
+  // A memória é complementar: se a pesquisa falhar, o agente ainda deve responder.
+  let knowledge = [];
+  let memoryWarning = null;
   try {
-    const history = await getRecentMessages(env, userId);
-    const knowledge = await searchKnowledge(env, userId, message);
+    knowledge = await searchKnowledge(env, userId, message);
+  } catch (error) {
+    memoryWarning = error.message;
+  }
+
+  try {
+    const history = await getRecentMessages(env, userId).catch(() => []);
     const answer = buildLocalAgentAnswer(message, knowledge, history);
-    await saveMessage(env, userId, "user", message);
-    await saveMessage(env, userId, "assistant", answer);
-    return json({ answer, model: "nexus-local-v1", mode: "independent" });
+
+    // Falha ao guardar o histórico não deve impedir o envio da resposta.
+    await saveMessage(env, userId, "user", message).catch(() => null);
+    await saveMessage(env, userId, "assistant", answer).catch(() => null);
+
+    return json({
+      answer,
+      model: "nexus-local-v1",
+      mode: "independent",
+      memory_warning: memoryWarning
+    });
   } catch (error) {
     return json({ error: "Falha ao processar a conversa.", detail: error.message }, 502);
   }
