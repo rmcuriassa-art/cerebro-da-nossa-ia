@@ -120,6 +120,12 @@ export default {
     const headers = corsHeaders(request, env);
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers });
     const url = new URL(request.url);
+    if (request.method === "GET" && url.pathname === "/") {
+      return new Response(
+        `<!doctype html><n<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nexus 2</title><style>body{font-family:system-ui;background:#0b1220;color:#e8eefc;display:grid;place-items:center;min-height:100vh;margin:0;padding:24px}main{max-width:560px;background:#14213a;padding:28px;border-radius:18px}h1{color:#8ab4ff}code{color:#9fe3b0}</style></head><body><main><h1>Nexus 2</h1><p>O serviço está publicado e respondendo.</p><p>Status: <strong>online</strong></p><p>Verificação técnica: <a href="/health" style="color:#8ab4ff">/health</a></p><p>O chat usa a rota <code>POST /v1/chat</code> e precisa de uma sessão autenticada.</p></main></body></html>`.replace("<n", ""),
+        { status: 200, headers: { "content-type": "text/html; charset=utf-8", ...headers } }
+      );
+    }
     if (request.method === "GET" && url.pathname === "/health") {
       return json({ ok: true, service: "nexus-worker", version: "0.1.0" }, 200, headers);
     }
